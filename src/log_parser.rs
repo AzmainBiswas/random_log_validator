@@ -46,6 +46,12 @@ impl<'a> Line<'a> {
     }
 }
 
+enum Expected {
+    Entry,
+    EntryOrWin,
+    None,
+}
+
 pub struct LogValidator {
     total_win: u64,
     total_round: u64,
@@ -160,13 +166,23 @@ impl LogValidator {
     fn validate_round(&self, line: &mut Line) -> Result<()> {
         let mut total_round_win = 0;
         let mut last_win = 0;
-        let mut expected_entry = true;
+        let mut expected = Expected::Entry;
         while let Some(ch) = line.peek() {
-            if expected_entry {
-                if !ch.is_ascii_alphabetic() {
+            match expected {
+                Expected::Entry if !ch.is_ascii_alphabetic() => {
+                    self.report_error(line, "Expected a Entry Code");
+                    return Err(ParseError::General.into());
                 }
-
+                Expected::EntryOrWin if !ch.is_ascii_alphabetic() && ch != b'#' => {
+                    self.report_error(line, "Expected a Entry Code or Win");
+                    return Err(ParseError::General.into());
+                }
+                _ => {}
             }
+
+            //TODO: need to figure out entry.
+            expected = Expected::None;
+
             match ch {
                 ch if ch.is_ascii_alphabetic() => {
                     //TODO: match code and compare the numbers.
@@ -184,14 +200,11 @@ impl LogValidator {
                         todo!("Handle ERROR");
                     }
                     println!(">> {}:{}:{}", _code, number1, number2);
+                    // TODO: expect , or #
                 }
                 b',' => {
                     let _ = line.next();
-                    //TODO: handle error
-                    let next = line.peek().unwrap();
-                    if !(next.is_ascii_alphabetic()) {
-                        todo!("Handle ERROR");
-                    }
+                    expected = Expected::Entry;
                 }
                 b'#' => {
                     //TODO: handle error
@@ -204,14 +217,15 @@ impl LogValidator {
                     if prev == b';' {
                         last_win += win;
                     }
-
-                    if let Some(_) = line.peek() {
-                        let _ = self.consume_semicolon(line);
-                    }
+                    // TODO: determine what to expect. requirement is not clear for this.
+                }
+                b';' => {
+                    let _ = self.consume_semicolon(line);
+                    expected = Expected::EntryOrWin;
                 }
                 _ => {
-                    //TODO: handle error
-                    todo!()
+                    self.report_error(line, &format!("Unexpected chracter \"{}\".", ch as char));
+                    return Err(ParseError::General.into());
                 }
             }
         }
