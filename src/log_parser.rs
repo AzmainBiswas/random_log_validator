@@ -127,27 +127,25 @@ impl LogValidator {
     // fn consume_comma(&self, line: &mut Line) {}
 
     fn consume_semicolon(&self, line: &mut Line) -> Result<()> {
-        match line.next() {
-            Some(b';') => Ok(()),
-            Some(ch) => {
-                line.curser -= 1;
-                self.report_error(&line, &format!("Expected \";\" but found \"{}\"", ch as char));
-                return Err(ParseError::General.into());
-            }
-            None => {
-                line.curser -= 1;
-                self.report_error(&line, "Unexpected line end.");
-                return Err(ParseError::General.into());
-            }
-        }
+        self.consume_char(line, b';')
     }
 
     fn consume_colon(&self, line: &mut Line) -> Result<()> {
+        self.consume_char(line, b':')
+    }
+
+    fn consume_char(&self, line: &mut Line, ch: u8) -> Result<()> {
         match line.next() {
-            Some(b':') => Ok(()),
-            Some(ch) => {
+            Some(found) if found == ch => Ok(()),
+            Some(found) => {
                 line.curser -= 1;
-                self.report_error(&line, &format!("Expected \":\" but found \"{}\"", ch as char));
+                self.report_error(
+                    &line,
+                    &format!(
+                        "Expected \"{}\" but found \"{}\"",
+                        ch as char, found as char
+                    ),
+                );
                 return Err(ParseError::General.into());
             }
             None => {
@@ -162,7 +160,13 @@ impl LogValidator {
     fn validate_round(&self, line: &mut Line) -> Result<()> {
         let mut total_round_win = 0;
         let mut last_win = 0;
+        let mut expected_entry = true;
         while let Some(ch) = line.peek() {
+            if expected_entry {
+                if !ch.is_ascii_alphabetic() {
+                }
+
+            }
             match ch {
                 ch if ch.is_ascii_alphabetic() => {
                     //TODO: match code and compare the numbers.
