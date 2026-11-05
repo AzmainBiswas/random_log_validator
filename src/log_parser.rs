@@ -49,14 +49,13 @@ impl<'a> Line<'a> {
 enum Expected {
     Entry,
     EntryOrWin,
+    CommaOrPound,
     None,
 }
 
 pub struct LogValidator {
     total_win: u64,
     total_round: u64,
-
-    line_win: u64,
 }
 
 impl LogValidator {
@@ -64,18 +63,15 @@ impl LogValidator {
         Self {
             total_win: 0,
             total_round: 0,
-            line_win: 0,
         }
     }
 
     pub fn validate_single_line(&mut self, line: &[u8]) -> Result<()> {
         self.total_round += 1; // increment the round
-        self.line_win = 0;
 
         let mut line = Line::new(line.trim_ascii());
 
         if line.peek() == None {
-            // TODO: check what to do with the empty line. ignoring for now
             return Ok(());
         }
 
@@ -85,10 +81,8 @@ impl LogValidator {
             return Err(ParseError::General.into());
         };
 
-        let _ = self.consume_semicolon(&mut line)?;
+        self.consume_semicolon(&mut line)?;
         self.validate_round(&mut line)?;
-
-        self.total_win += self.line_win;
         Ok(())
     }
 
@@ -101,8 +95,9 @@ impl LogValidator {
             }
 
             found_digit = true;
-            //TODO: Handle Error properly
-            number = number.checked_mul(10)?.checked_add((ch - b'0') as usize)?;
+            number = number
+                .checked_mul(10)
+                .and_then(|v| v.checked_add((ch - b'0') as usize))?;
             let _ = line.next();
         }
 
@@ -129,8 +124,6 @@ impl LogValidator {
 
         std::str::from_utf8(&line.data[start..(start + len)]).ok()
     }
-
-    // fn consume_comma(&self, line: &mut Line) {}
 
     fn consume_semicolon(&self, line: &mut Line) -> Result<()> {
         self.consume_char(line, b';')
@@ -163,7 +156,7 @@ impl LogValidator {
     }
 
     //b"15;R:21:26,B:62:170,B:72:170,B:93:182,B:47:164,B:118:172,RS:30:31#0;B:45:101,B:30:110,B:34:107,B:85:118,B:3:100,W:2:3#4;#4\n";
-    fn validate_round(&self, line: &mut Line) -> Result<()> {
+    fn validate_round(&mut self, line: &mut Line) -> Result<()> {
         let mut total_round_win = 0;
         let mut last_win = 0;
         let mut expected = Expected::Entry;
@@ -177,41 +170,60 @@ impl LogValidator {
                     self.report_error(line, "Expected a Entry Code or Win");
                     return Err(ParseError::General.into());
                 }
+                Expected::CommaOrPound if ch != b',' && ch != b'#' => {
+                    self.report_error(line, "Expected \",\" or \"#\" here.");
+                    return Err(ParseError::General.into());
+                }
                 _ => {}
             }
 
-            //TODO: need to figure out entry.
+            //TODO: for now it is non to avoid any error.
             expected = Expected::None;
 
             match ch {
                 ch if ch.is_ascii_alphabetic() => {
-                    //TODO: match code and compare the numbers.
-                    let _code = self.extract_code(line).unwrap();
-                    let _ = self.consume_colon(line);
+                    let Some(code) = self.extract_code(line) else {
+                        self.report_error(line, "Expected code there.");
+                        return Err(ParseError::General.into());
+                    };
 
-                    //TODO: handle error
-                    let number1 = self.extract_number(line).unwrap();
-                    let _ = self.consume_colon(line);
+                    self.consume_colon(line)?;
 
-                    //TODO: handle error
-                    let number2 = self.extract_number(line).unwrap();
+                    let Some(number1) = self.extract_number(line) else {
+                        self.report_error(line, "Expected a Number here");
+                        return Err(ParseError::General.into());
+                    };
+                    self.consume_colon(line)?;
+
+                    let Some(number2) = self.extract_number(line) else {
+                        self.report_error(line, "Expected a Number here");
+                        return Err(ParseError::General.into());
+                    };
 
                     if number1 >= number2 {
-                        todo!("Handle ERROR");
+                        self.report_error(
+                            line,
+                            &format!("Number in code \"{}\" is not correct.", code),
+                        );
+                        return Err(ParseError::General.into());
                     }
-                    println!(">> {}:{}:{}", _code, number1, number2);
-                    // TODO: expect , or #
+
+                    expected = Expected::CommaOrPound;
                 }
                 b',' => {
                     let _ = line.next();
                     expected = Expected::Entry;
                 }
                 b'#' => {
-                    //TODO: handle error
-                    let prev = line.prev().unwrap();
+                    let Some(prev) = line.prev() else {
+                        self.report_error(line, "Unexpected Begenning of line");
+                        return Err(ParseError::General.into());
+                    };
                     let _ = line.next();
-                    //TODO: handle error
-                    let win = self.extract_number(line).unwrap();
+                    let Some(win) = self.extract_number(line) else {
+                        self.report_error(line, "Expected number here.");
+                        return Err(ParseError::General.into());
+                    };
                     total_round_win += win;
 
                     if prev == b';' {
@@ -230,9 +242,16 @@ impl LogValidator {
             }
         }
 
+        //TODO: add a flag wheather to check the wins or not.
         if total_round_win != 2 * last_win {
-            todo!()
+            self.report_error(
+                line,
+                &format!("Wins are not matching please check the win."),
+            );
+            return Err(ParseError::General.into());
         }
+
+        self.total_win += last_win as u64;
 
         Ok(())
     }
