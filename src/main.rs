@@ -1,58 +1,99 @@
-use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
-use std::process::{ExitCode};
+use std::env;
+use std::io::{BufWriter, Write};
+use std::process::ExitCode;
 
-use crate::error::Result;
-use crate::log_parser::LogValidator;
+use crate::log_validator::validate_random_log;
+use crate::screen_validator::validate_screens;
 
-mod log_parser;
 mod error;
+mod log_validator;
+mod screen_validator;
 
-fn main() -> ExitCode {
-    let file_path = "./tests/random_logs.txt";
-    return validate_random_log(file_path);
+fn usage(program: &str) {
+    println!("USAGE: {} <OPTIONS> [file_path]", program);
+    println!("     OPTIONS:");
+    println!("             -r    validate random log file.");
+    println!("             -s    validate screen log file.");
+    println!("             -h    help");
 }
 
-fn validate_random_log(file_path: &str) -> ExitCode {
-  let file_size: usize = fs::metadata(file_path).expect("ERROR: unable to read the the metadata of the file").len() as usize;
-  let f = File::open(file_path).expect("ERROR: unable to open the file.");
+fn main() -> ExitCode {
+    let args: Vec<String> = env::args().collect();
+    let Some(option) = args.get(1) else {
+        eprintln!("ERROR: provide a option");
+        usage(args.get(0).unwrap());
+        return ExitCode::FAILURE;
+    };
+    let Some(file_path) = args.get(2) else {
+        eprintln!("ERROR: provide a file path");
+        usage(args.get(0).unwrap());
+        return ExitCode::FAILURE;
+    };
 
-  let mut reader = BufReader::new(f);
-
-  let stdout = io::stdout();
-  let mut out = BufWriter::new(stdout.lock());
-
-  let mut buf = Vec::<u8>::with_capacity(1024);
-  let mut processed: usize = 0;
-  while let Ok(size) = reader.read_until(b'\n', &mut buf) {
-      processed += size;
-      if size == 0 {
-          break;
-      }
-      write!(out, "\r\x1b[2KProcessing ").expect("Unable to write to file");
-      out.write_all(&buf).expect("Unable to write to file.");
-
-      let pct = (processed * 100) / file_size;
-      let filled = (processed * 30) / file_size;
-      let bar = "=".repeat(filled) + &" ".repeat(30 - filled);
-      write!(out, "\r[{}] {}%", bar, pct).expect("Unable to write to file.");
-
-      buf.clear();
-      out.flush().expect("Unable to flush the stdout");
-  }
-  ExitCode::SUCCESS
+    match option.as_str() {
+        "-h" => {
+            usage(args.get(0).unwrap());
+        }
+        "-r" => {
+            return validate_random_log(&file_path, 1 << 20);
+        }
+        "-s" => {
+            return validate_screens(file_path, 1 << 20);
+        }
+        _ => {
+            eprintln!("ERROR: provide a valid option");
+            usage(args.get(0).unwrap());
+            return ExitCode::FAILURE;
+        }
+    };
+    ExitCode::SUCCESS
 }
 
 struct ProgressBar {
-  total: usize,
-  current: usize,
+    bar_size: usize,
+
+    total: usize,
+    current: usize,
+    last_persentage: i32,
 }
 
 impl ProgressBar {
-  fn new(total: usize) -> Self {
-    Self {
-      total: total,
-      current: 0,
+    fn new(total: usize, bar_size: usize) -> Self {
+        Self {
+            bar_size: bar_size,
+            total: total,
+            current: 0,
+            last_persentage: -1,
+        }
     }
-  }
+
+    fn process_bar(
+        &mut self,
+        out: &mut BufWriter<std::io::StdoutLock>,
+        current: usize,
+        precision: usize,
+    ) {
+        self.current = current;
+
+        let scale = 10usize.pow(precision as u32);
+        let pct = self.current * 100 * scale / self.total;
+        if self.last_persentage >= pct as i32 {
+            return;
+        }
+
+        let fill = self.current * self.bar_size / self.total;
+        let bar = "=".repeat(fill) + &" ".repeat(self.bar_size - fill);
+        write!(
+            out,
+            "\x1b[2KProgress [{b}] {p:.precision$}%\r",
+            b = bar,
+            p = pct as f32 / scale as f32
+        )
+        .expect("ERROR: unable to write to stdout");
+        if pct == 100 * scale {
+            write!(out, "\n").expect("ERROR: unable to write to stdout");
+        }
+        out.flush().expect("ERROR: unable to flush the stdout.");
+        self.last_persentage = pct as i32;
+    }
 }

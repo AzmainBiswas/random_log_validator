@@ -1,6 +1,13 @@
-use std::io::{BufWriter, Write};
+use std::{
+    fs::{self, File},
+    io::{self, BufRead, BufReader, BufWriter, Write},
+    process::ExitCode,
+};
 
-use crate::error::{ParseError, Result};
+use crate::{
+    ProgressBar,
+    error::{ParseError, Result},
+};
 
 pub struct Line<'a> {
     pub data: &'a [u8],
@@ -54,8 +61,8 @@ enum Expected {
 }
 
 pub struct LogValidator {
-    total_win: u64,
-    total_round: u64,
+    pub total_win: u64,
+    pub total_round: u64,
 }
 
 impl LogValidator {
@@ -67,13 +74,12 @@ impl LogValidator {
     }
 
     pub fn validate_single_line(&mut self, line: &[u8]) -> Result<()> {
-        self.total_round += 1; // increment the round
-
         let mut line = Line::new(line.trim_ascii());
-
         if line.peek() == None {
             return Ok(());
         }
+
+        self.total_round += 1; // increment the round
 
         // first parse round;
         if self.extract_number(&mut line).is_none() {
@@ -155,7 +161,6 @@ impl LogValidator {
         }
     }
 
-    //b"15;R:21:26,B:62:170,B:72:170,B:93:182,B:47:164,B:118:172,RS:30:31#0;B:45:101,B:30:110,B:34:107,B:85:118,B:3:100,W:2:3#4;#4\n";
     fn validate_round(&mut self, line: &mut Line) -> Result<()> {
         let mut total_round_win = 0;
         let mut last_win = 0;
@@ -279,4 +284,47 @@ impl LogValidator {
 
         err.flush().expect("ERROR: unable to flush stderr");
     }
+}
+
+pub fn validate_random_log(file_path: &str, buf_size: usize) -> ExitCode {
+    let file_size: usize = fs::metadata(file_path)
+        .expect("ERROR: unable to read the the metadata of the file")
+        .len() as usize;
+    let f = File::open(file_path).expect("ERROR: unable to open the file.");
+    let mut reader = BufReader::with_capacity(buf_size, f);
+
+    let stdout = io::stdout();
+    let mut out = BufWriter::new(stdout.lock());
+
+    let mut processed: usize = 0;
+    let mut progress = ProgressBar::new(file_size, 50);
+
+    let mut log_validator = LogValidator::new();
+
+    let mut buf = Vec::<u8>::with_capacity(1024);
+    while let Ok(size) = reader.read_until(b'\n', &mut buf) {
+        if size == 0 {
+            break;
+        }
+        // out.write_all(b"\x1b[2KProcessing: ").expect("ERROR: unable to write to stdout.");
+        // out.write_all(&buf).expect("ERROR: unable to write to stdout.");
+        match log_validator.validate_single_line(&buf) {
+            Err(_) => {
+                return ExitCode::FAILURE;
+            }
+            _ => {}
+        }
+
+        processed += size;
+        progress.process_bar(&mut out, processed, 2);
+
+        buf.clear();
+    }
+
+    write!(out, "Total Round: {}\n", log_validator.total_round)
+        .expect("ERROR: unable to write to stdout.");
+    write!(out, "Total Win: {}\n", log_validator.total_win)
+        .expect("ERROR: unable to write to stdout.");
+    out.flush().expect("Unable to flush the stdout");
+    ExitCode::SUCCESS
 }
