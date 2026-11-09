@@ -33,13 +33,13 @@ fn main() -> ExitCode {
     match option.as_str() {
         "-h" => {
             usage(args.get(0).unwrap());
-        }
+        },
         "-r" => {
             return validate_random_log(&file_path, 1 << 20);
-        }
+        },
         "-s" => {
             return validate_screens(file_path, 1 << 20);
-        }
+        },
         _ => {
             eprintln!("ERROR: provide a valid option");
             usage(args.get(0).unwrap());
